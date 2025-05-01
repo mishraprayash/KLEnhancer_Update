@@ -7,3 +7,6 @@ umap-learn
 matplotlib
 seaborn
 tqdm
+hdbscan
+joblib
+pyarrow
