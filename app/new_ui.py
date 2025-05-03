@@ -18,6 +18,8 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 PAGE_SIZE = 30
 
+REPORT_DIR = "reports"
+os.makedirs(REPORT_DIR, exist_ok=True)
 
 # --- Load Master Library ---
 @st.cache_data
@@ -144,6 +146,151 @@ def sanitize_df(df):
             except Exception:
                 df2[col] = df2[col].astype(str)
     return df2
+
+import os
+import uuid
+import plotly.express as px
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+import tempfile
+import glob
+
+
+# 1. Unified styling function for Plotly charts
+def style_plotly_fig(fig):
+    fig.update_layout(
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family="Arial", size=12),
+        margin=dict(t=60, b=50, l=60, r=60),
+        legend=dict(bgcolor='white')
+    )
+    return fig
+
+# 2. Save figure and add to PDF
+def add_chart_to_pdf(fig, buffer, width=7 * inch, height=5 * inch):
+    img_filename = f"chart_{uuid.uuid4().hex}.png"
+    img_path = os.path.join(REPORT_DIR, img_filename)
+    fig.write_image(img_path, width=1000, height=700)
+    buffer.append(RLImage(img_path, width=width, height=height))
+    buffer.append(Spacer(1, 0.3 * inch))
+
+# 3. Cleanup helper
+def cleanup_old_charts():
+    for f in glob.glob(os.path.join(REPORT_DIR, "chart_*.png")):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
+# 4. Main PDF generator
+def generate_overview_report(df, filt, time_series, path):
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=letter,
+        leftMargin=1 * inch,
+        rightMargin=1 * inch,
+        topMargin=1 * inch,
+        bottomMargin=1 * inch
+    )
+
+    styles = getSampleStyleSheet()
+    heading_style = ParagraphStyle(
+        name="CustomHeading",
+        parent=styles["Heading2"],
+        fontSize=14,
+        textColor=colors.HexColor("#003366"),
+        spaceAfter=12,
+        spaceBefore=12
+    )
+
+    metric_style = ParagraphStyle(
+        name="MetricStyle",
+        parent=styles["Normal"],
+        fontSize=11,
+        textColor=colors.darkblue,
+        spaceAfter=6
+    )
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Title'],
+        textColor=colors.HexColor("#006699"),
+        fontSize=20,
+        spaceAfter=20
+    )
+
+    elements = []
+
+    # Title
+    elements.append(Paragraph("🧠 Knowledge Library Curation Report", title_style))
+
+    # Metrics
+    elements.append(Paragraph("📊 <b>Key Metrics</b>", heading_style))
+    metrics = {
+        "Total Entries": len(df),
+        "Outdated Entries": int(df["is_outdated"].sum()),
+        "Unique Products": df["product_name"].nunique(),
+        "Unique Categories": df["category"].nunique(),
+        "Avg Duplicate Count": round(df["duplicate_count"].mean(), 2),
+        "Most Recent Entry": df["created_at"].max().strftime("%Y-%m-%d")
+    }
+    for k, v in metrics.items():
+        elements.append(Paragraph(f"<b>{k}:</b> {v}", metric_style))
+    elements.append(Spacer(1, 0.4 * inch))
+
+    # Charts Section
+    elements.append(Paragraph("📈 <b>Visual Insights</b>", heading_style))
+
+    # Chart 1: Questions per Category
+    cat_df = df["category"].value_counts().reset_index(name="count")
+    cat_df.columns = ["category", "count"]
+    fig1 = px.bar(cat_df, x="category", y="count", title="Questions per Category", color="count", color_continuous_scale="Blues")
+    fig1.update_traces(marker_line_color='black', marker_line_width=1)
+    add_chart_to_pdf(style_plotly_fig(fig1), elements)
+
+    # Chart 2: Product Distribution
+    prod_df = df["product_name"].value_counts().reset_index(name="count")
+    prod_df.columns = ["product_name", "count"]
+    fig2 = px.pie(prod_df, names="product_name", values="count", title="Product Distribution", hole=0.4,
+                  color_discrete_sequence=px.colors.qualitative.Set3)
+    fig2.update_traces(textinfo='percent+label', pull=[0.05]*len(prod_df),
+                       marker=dict(line=dict(color='black', width=1)))
+    add_chart_to_pdf(style_plotly_fig(fig2), elements)
+
+    # Chart 3: Entries Over Time
+    fig3 = px.histogram(df, x="created_at", nbins=30, title="Entries Over Time",
+                        color_discrete_sequence=["#636EFA"])
+    fig3.update_traces(marker_line_color='black', marker_line_width=1.2)
+    add_chart_to_pdf(style_plotly_fig(fig3), elements)
+
+    # Chart 4: Avg Duplicate Count by Product
+    dup_avg = df.groupby("product_name")["duplicate_count"].mean().reset_index()
+    fig4 = px.bar(dup_avg, x="product_name", y="duplicate_count", title="Avg Duplicate Count per Product",
+                  color="duplicate_count", color_continuous_scale="Viridis")
+    fig4.update_traces(marker_line_color='black', marker_line_width=1.2)
+    fig4.update_layout(xaxis_tickangle=45)
+    add_chart_to_pdf(style_plotly_fig(fig4), elements)
+
+    # Chart 5: Outdated Entries Over Time
+    outdated_df = df[df["is_outdated"] == True]
+    if not outdated_df.empty:
+        outdated_df = outdated_df.copy()
+        outdated_df["date"] = outdated_df["created_at"].dt.date
+        outdated_counts = outdated_df.groupby("date").size().reset_index(name="outdated_count")
+        fig5 = px.line(outdated_counts, x="date", y="outdated_count", title="Outdated Entries Over Time",
+                       markers=True, line_shape="spline")
+        fig5.update_traces(line=dict(color="#EF553B", width=3),
+                           marker=dict(size=8, color='white', line=dict(width=2, color='#EF553B')))
+        fig5.update_layout(xaxis_title="Date", yaxis_title="Outdated Count")
+        add_chart_to_pdf(style_plotly_fig(fig5), elements)
+
+    # Build PDF
+    doc.build(elements)
+
 
 
 # Initialize session state keys
@@ -748,9 +895,35 @@ else:
             if selected_cqid:
                 selected_row = filt[filt["cqid"] == selected_cqid].iloc[0].to_dict()
                 st.json(selected_row)
+            
+            report_type = st.selectbox(
+            "Select Report Type",
+            ["Overview Summary"],
+            key="report_type"
+            )
 
+            if st.button("Generate PDF", key="generate_pdf_btn"):
+                with st.spinner("Generating PDF..."):
+                    temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+                    
+                    if report_type == "Overview Summary":
+                        generate_overview_report(df, filt, time_series, temp_pdf.name)
 
-    # Return to file selection
+                    st.success("✅ PDF Generated!")
+
+                    # Read and offer download
+                    with open(temp_pdf.name, "rb") as f:
+                        st.download_button(
+                            label="📥 Download PDF",
+                            data=f,
+                            file_name="kl_curation_report.pdf",
+                            mime="application/pdf",
+                            key="pdf_download_btn"
+                        )
+                    
+                    cleanup_old_charts()
+
+        # Return to file selection
     if st.sidebar.button("← Change File"):
         st.session_state.df = None
         st.rerun()
@@ -944,3 +1117,6 @@ else:
         except Exception as e:
             st.error(f"❌ Error processing file: {e}")
             st.error(traceback.format_exc())
+
+
+
