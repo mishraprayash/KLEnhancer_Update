@@ -568,23 +568,18 @@ else:
         fig_time = px.histogram(df, x="created_at", nbins=30, title="Entries Over Time")
         st.plotly_chart(fig_time, use_container_width=True)
 
-# ---> Working code
-
-
     with tabs[1]:  # Clusters with suggestions
         similarity_threshold = st.slider(
-                "Select Similarity Threshold for Filtering or Manual Clustering",
-                min_value=0.0, max_value=1.0, value=0.75, step=0.01
-            )
+            "Select Similarity Threshold for Filtering or Manual Clustering",
+            min_value=0.0, max_value=1.0, value=0.75, step=0.01
+        )
 
-        st.write(f"Current Threshold: **{similarity_threshold:.2f}**")
-        
+        st.write(f"Current Threshold: *{similarity_threshold:.2f}*")
         st.subheader("🔍 Clusters")
 
         if suggestion_df.empty:
             st.warning("No suggestions available for clusters.")
         else:
-            # Filter by action type
             actions = suggestion_df['action'].unique().tolist()
             selected_action = st.selectbox("Filter by Action", ["All"] + actions, key="cluster_action")
 
@@ -597,119 +592,188 @@ else:
             if selected_cluster != "All":
                 filtered = filtered[filtered['cluster_id'].astype(str) == selected_cluster]
 
-            st.write(f"{len(filtered)} suggestions found for selected filter.")
-            paged_filtered = paginate_df(filtered, key="suggestion_pagination")
+            # st.write(f"{len(filtered)} suggestions found for selected filter.")
 
-            for i, row in paged_filtered.iterrows():
-                cqid = row['cqid']
-                action = row['action']
-                target = row.get('target_cqid', None)
-                cluster = row.get('cluster_id', 'N/A')
-                key_suffix = f"{cqid}_{action}_{i}"
+            # Special handling for grouped merge actions
+            if selected_action == "merge":
+                # Group all merge suggestions by cluster
+                cluster_groups = (
+                    filtered.groupby('cluster_id')
+                    .apply(lambda g: set(g['cqid']).union(set(g['target_cqid'])))
+                    .reset_index(name='cqid_set')
+                )
 
-                # Avoid logging the same action twice
-                if key_suffix in st.session_state["logged_actions"]:
-                    continue
+                for _, row in cluster_groups.iterrows():
+                    cluster_id = row['cluster_id']
+                    cqid_set = list(row['cqid_set'])
 
-                qna_row = df[df['cqid'] == cqid]
-                if qna_row.empty:
-                    continue
-                qna_row = qna_row.squeeze()
+                    st.markdown(f"### Cluster {cluster_id}")
+                    with st.expander(f"🔗 Merge Candidates: {len(cqid_set)} entries"):
+                        entry_data = df[df['cqid'].isin(cqid_set)]
 
-                with st.expander(f"📌 {action.upper()} — CQID: {cqid} | Cluster: {cluster}"):
-                    st.markdown(f"**Product:** {qna_row.get('product_name', 'N/A')}")
-                    st.markdown(f"**Category:** {qna_row.get('category', 'N/A')}")
-                    st.markdown(f"**Question:** {qna_row.get('question', '')}")
-                    st.markdown(f"**Details:** {qna_row.get('details', '')}")
-                    st.markdown(f"**Answer:** {qna_row.get('answer', '')}")
+                        for _, qna_row in entry_data.iterrows():
+                            st.markdown(f"*CQID:* {qna_row['cqid']}")
+                            st.markdown(f"- *Product:* {qna_row.get('product_name', 'N/A')}")
+                            st.markdown(f"- *Category:* {qna_row.get('category', 'N/A')}")
+                            st.markdown(f"- *Q:* {qna_row.get('question', '')}")
+                            st.markdown(f"- *Details:* {qna_row.get('details', '')}")
+                            st.markdown(f"- *A:* {qna_row.get('answer', '')}")
+                            st.markdown("---")
 
-                    if action in ["merge", "review"] and pd.notna(target):
-                        st.markdown("---")
-                        st.markdown(f"**Target → CQID: {target}**")
-                        target_row = df[df['cqid'] == target]
-                        if not target_row.empty:
-                            target_row = target_row.squeeze()
-                            st.markdown(f"**Target Product:** {target_row.get('product_name', 'N/A')}")
-                            st.markdown(f"**Target Category:** {target_row.get('category', 'N/A')}")
-                            st.markdown(f"**Target Question:** {target_row.get('question', '')}")
-                            st.markdown(f"**Target Details:** {target_row.get('details', '')}")
-                            st.markdown(f"**Target Answer:** {target_row.get('answer', '')}")
-                        else:
-                            st.warning("Target CQID not found in dataset.")
+                        # Merge form across the cluster
+                        unique_key_base = f"{cluster_id}"
+                        st.subheader("Merge Cluster into Single Entry")
 
-                    if action == "archive":
-                        st.markdown("---")
-                        st.markdown(f"**Created At:** {qna_row.get('created_at', '')}")
-                        st.markdown(f"**Deleted At:** {qna_row.get('deleted_at', 'N/A')}")
-
-                    col1, col2 = st.columns(2)
-                    accept = col1.button("✅ Accept", key=f"accept_{key_suffix}")
-                    reject = col2.button("❌ Reject", key=f"reject_{key_suffix}")
-
-                    if accept or reject:
-                        log_action(action, cqid, target)
-                        st.session_state["logged_actions"].add(key_suffix)
-                        st.success(f"{'Accepted' if accept else 'Rejected'} action for CQID {cqid}")
-
-                    # If action is "merge", show the merge form
-                    if action == "merge" and pd.notna(target):
-                        st.markdown("---")
-                        st.subheader("Merge Entries")
-
-                        unique_key_base = f"{cqid}_{target}_{i}" 
-
-                        # Input for merged question and answer
                         new_q = st.text_input("Merged Question", key=f"new_question_{unique_key_base}")
                         new_a = st.text_area("Merged Answer", key=f"new_answer_{unique_key_base}")
 
-                        # Get categories from selected entries
-                        selected_categories = df[df["cqid"].isin([cqid, target])]["category"].dropna().unique().tolist()
+                        selected_categories = entry_data["category"].dropna().unique().tolist()
                         selected_categories.sort()
 
-                        st.markdown("### Category")
                         selected_cat = st.selectbox("Select Category", options=selected_categories + ["Other"], key=f"sel_cat_{unique_key_base}")
-                        custom_cat = ""
-                        if selected_cat == "Other":
-                            custom_cat = st.text_input("Enter Custom Category", key=f"custom_cat_{unique_key_base}")
-
-                        # Use selected or custom category in the merged entry
+                        custom_cat = st.text_input("Enter Custom Category", key=f"custom_cat_{unique_key_base}") if selected_cat == "Other" else ""
                         final_category = custom_cat if selected_cat == "Other" else selected_cat
 
-                        # Optionally, you could add any extra fields like details
                         new_details = st.text_area("Additional Details (Optional)", key=f"new_details_{unique_key_base}")
 
                         if st.button("Confirm Merge", key=f"confirm_merge_{unique_key_base}"):
                             if not new_q or not new_a:
                                 st.error("Both merged question and answer are required!")
                             else:
-                                # Create a new merged entry with the necessary details
                                 new_entry = {
-                                    "cqid": str(uuid.uuid4()),  # Generate a new UUID for the merged entry
+                                    "cqid": str(uuid.uuid4()),
                                     "question": new_q,
                                     "answer": new_a,
                                     "category": final_category,
-                                    "duplicate_count": 1,  # Assuming merged entries have a count of 1
+                                    "duplicate_count": len(cqid_set),
                                     "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "is_outdated": False,  # Newly created, so not outdated
-                                    "merged_ids": [cqid, target],  # Store the original CQIDs that were merged
-                                    "details": new_details,  # Add any optional additional details
+                                    "is_outdated": False,
+                                    "merged_ids": cqid_set,
+                                    "details": new_details,
                                 }
 
-                                print("New entry", new_entry)
+                                log_action("merge", new_entry, cqid_set)
 
-                                # Log the new merged entry in the activity log (you can modify this based on your log format)
-                                log_action("merge", new_entry,[cqid, target])
-
-                                # Append the new merged entry to the session state
                                 if "merged_entries" not in st.session_state:
                                     st.session_state["merged_entries"] = []
                                 st.session_state["merged_entries"].append(new_entry)
 
-                                # Success message
-                                st.success(
-                                    f"Merged {len([cqid, target])} entries into a new entry: {new_entry['cqid']}")
-                                
+                                st.success(f"Merged {len(cqid_set)} entries into new CQID: {new_entry['cqid']}")
 
+            else:
+                # For non-merge actions (review, archive), fallback to row-wise logic
+                paged_filtered = paginate_df(filtered, key="suggestion_pagination")
+
+
+
+                for i, row in paged_filtered.iterrows():
+                    cqid = row['cqid']
+                    action = row['action']
+                    target = row.get('target_cqid', None)
+                    cluster = row.get('cluster_id', 'N/A')
+                    key_suffix = f"{cqid}_{action}_{i}"
+
+                    # Avoid logging the same action twice
+                    if key_suffix in st.session_state["logged_actions"]:
+                        continue
+
+                    qna_row = df[df['cqid'] == cqid]
+                    if qna_row.empty:
+                        continue
+                    qna_row = qna_row.squeeze()
+
+                    with st.expander(f"📌 {action.upper()} — CQID: {cqid} | Cluster: {cluster}"):
+                        st.markdown(f"*Product:* {qna_row.get('product_name', 'N/A')}")
+                        st.markdown(f"*Category:* {qna_row.get('category', 'N/A')}")
+                        st.markdown(f"*Question:* {qna_row.get('question', '')}")
+                        st.markdown(f"*Details:* {qna_row.get('details', '')}")
+                        st.markdown(f"*Answer:* {qna_row.get('answer', '')}")
+
+                        if action in ["merge", "review"] and pd.notna(target):
+                            st.markdown("---")
+                            st.markdown(f"*Target → CQID: {target}*")
+                            target_row = df[df['cqid'] == target]
+                            if not target_row.empty:
+                                target_row = target_row.squeeze()
+                                st.markdown(f"*Target Product:* {target_row.get('product_name', 'N/A')}")
+                                st.markdown(f"*Target Category:* {target_row.get('category', 'N/A')}")
+                                st.markdown(f"*Target Question:* {target_row.get('question', '')}")
+                                st.markdown(f"*Target Details:* {target_row.get('details', '')}")
+                                st.markdown(f"*Target Answer:* {target_row.get('answer', '')}")
+                            else:
+                                st.warning("Target CQID not found in dataset.")
+
+                        if action == "archive":
+                            st.markdown("---")
+                            st.markdown(f"*Created At:* {qna_row.get('created_at', '')}")
+                            st.markdown(f"*Deleted At:* {qna_row.get('deleted_at', 'N/A')}")
+
+                        col1, col2 = st.columns(2)
+                        accept = col1.button("✅ Accept", key=f"accept_{key_suffix}")
+                        reject = col2.button("❌ Reject", key=f"reject_{key_suffix}")
+
+                        if accept or reject:
+                            log_action(action, cqid, target)
+                            st.session_state["logged_actions"].add(key_suffix)
+                            st.success(f"{'Accepted' if accept else 'Rejected'} action for CQID {cqid}")
+
+                        # If action is "merge", show the merge form
+                        if action == "merge" and pd.notna(target):
+                            st.markdown("---")
+                            st.subheader("Merge Entries")
+
+                            unique_key_base = f"{cqid}_{target}_{i}" 
+
+                            # Input for merged question and answer
+                            new_q = st.text_input("Merged Question", key=f"new_question_{unique_key_base}")
+                            new_a = st.text_area("Merged Answer", key=f"new_answer_{unique_key_base}")
+
+                            # Get categories from selected entries
+                            selected_categories = df[df["cqid"].isin([cqid, target])]["category"].dropna().unique().tolist()
+                            selected_categories.sort()
+
+                            st.markdown("### Category")
+                            selected_cat = st.selectbox("Select Category", options=selected_categories + ["Other"], key=f"sel_cat_{unique_key_base}")
+                            custom_cat = ""
+                            if selected_cat == "Other":
+                                custom_cat = st.text_input("Enter Custom Category", key=f"custom_cat_{unique_key_base}")
+
+                            # Use selected or custom category in the merged entry
+                            final_category = custom_cat if selected_cat == "Other" else selected_cat
+
+                            # Optionally, you could add any extra fields like details
+                            new_details = st.text_area("Additional Details (Optional)", key=f"new_details_{unique_key_base}")
+
+                            if st.button("Confirm Merge", key=f"confirm_merge_{unique_key_base}"):
+                                if not new_q or not new_a:
+                                    st.error("Both merged question and answer are required!")
+                                else:
+                                    # Create a new merged entry with the necessary details
+                                    new_entry = {
+                                        "cqid": str(uuid.uuid4()),  # Generate a new UUID for the merged entry
+                                        "question": new_q,
+                                        "answer": new_a,
+                                        "category": final_category,
+                                        "duplicate_count": 1,  # Assuming merged entries have a count of 1
+                                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        "is_outdated": False,  # Newly created, so not outdated
+                                        "merged_ids": [cqid, target],  # Store the original CQIDs that were merged
+                                        "details": new_details,  # Add any optional additional details
+                                    }
+
+                                    print("New entry", new_entry)
+
+                                    # Log the new merged entry in the activity log (you can modify this based on your log format)
+                                    log_action("merge", new_entry,[cqid, target])
+
+                                    # Append the new merged entry to the session state
+                                    if "merged_entries" not in st.session_state:
+                                        st.session_state["merged_entries"] = []
+                                    st.session_state["merged_entries"].append(new_entry)
+
+                                    # Success message
+                                    st.success(
+                                        f"Merged {len([cqid, target])} entries into a new entry: {new_entry['cqid']}")
 
     with tabs[2]:  # Outdated
         st.subheader("🆕 Outdated Q&A")
