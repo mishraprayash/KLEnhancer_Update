@@ -1,1 +1,1 @@
-{"filename": "cleaned_duplicates_new_pqad.csv", "timestamp": "2025-05-02T16:41:52.840006", "rows": 15408, "columns": ["cqid", "product_id", "created_at", "category", "deleted_at", "question", "answer", "details", "product_name", "is_outdated", "duplicate_count"]}
+{"filename": "cleaned_duplicates_new_pqad.csv", "timestamp": "2025-05-03T05:12:23.667713", "rows": 15408, "columns": ["cqid", "product_id", "created_at", "category", "deleted_at", "question", "answer", "details", "product_name", "is_outdated", "duplicate_count"]}

@@ -811,8 +811,8 @@ def find_matches_with_existing(new_df: pd.DataFrame, existing_df: pd.DataFrame, 
     right = on + (['cqid'] if 'cqid' in b.columns else [])
 
     merged = a.merge(b[right], on=on, how='left', indicator=True)
-    matches = merged[merged['_merge'] == 'both']
     unique = merged[merged['_merge'] == 'left_only']
+    matches = merged[merged['_merge'] == 'both'].drop_duplicates(subset=on)
     return unique, matches
 
 # Map strategy to group columns
